@@ -1,0 +1,273 @@
+---
+# Builds FrankenPHP for several PHP versions, each with an Xdebug module,
+# for Linux (glibc, x86_64 + aarch64), macOS (arm64 + x86_64) and Windows (x86_64),
+# and publishes them as one GitHub release with a manifest.json that QuickSpin reads:
+#   https://github.com/<owner>/<repo>/releases/latest/download/manifest.json
+name: Build FrankenPHP + Xdebug
+
+on:
+  workflow_dispatch:
+    inputs:
+      frankenphp:
+        description: "FrankenPHP version (e.g. 1.13.3). Empty = latest release"
+        required: false
+        type: string
+      php:
+        description: "PHP minor versions, comma-separated"
+        required: false
+        default: "8.2,8.3,8.4,8.5"
+        type: string
+      force:
+        description: "Rebuild even if a release for this FrankenPHP version exists"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 4 * * 1" # Mondays: pick up new FrankenPHP releases and PHP patch versions
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Everything a WordPress site commonly needs; kept identical across PHP versions.
+  PHP_EXTENSIONS: "apcu,bcmath,bz2,calendar,ctype,curl,dom,exif,fileinfo,filter,ftp,gd,gettext,gmp,iconv,igbinary,imagick,intl,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,pcntl,pdo,pdo_mysql,pdo_sqlite,phar,posix,readline,redis,session,simplexml,soap,sockets,sodium,sqlite3,tokenizer,xml,xmlreader,xmlwriter,xsl,zip,zlib"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      frankenphp: ${{ steps.v.outputs.frankenphp }}
+      release: ${{ steps.v.outputs.release }}
+      build: ${{ steps.v.outputs.build }}
+      php: ${{ steps.v.outputs.php }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_FP: ${{ inputs.frankenphp }}
+          INPUT_PHP: ${{ inputs.php || '8.2,8.3,8.4,8.5' }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set -euo pipefail
+          fp="${INPUT_FP#v}"
+          if [ -z "$fp" ]; then
+            fp="$(gh release view --repo php/frankenphp --json tagName --jq .tagName)"
+            fp="${fp#v}"
+          fi
+          [[ "$fp" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad FrankenPHP version '$fp'"; exit 1; }
+          release="v${fp}"
+          build=true
+          if gh release view "$release" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "$FORCE" != "true" ] && [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            echo "Release $release already exists — nothing to do."
+            build=false
+          fi
+          php_json="$(echo "$INPUT_PHP" | tr -d ' ' | jq -Rc 'split(",") | map(select(test("^8\\.[2-9]$")))')"
+          echo "frankenphp=$fp" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "php=$php_json" >> "$GITHUB_OUTPUT"
+          echo "FrankenPHP $fp, PHP $php_json, release $release, build=$build"
+
+  # ---------------------------------------------------------------- Linux (glibc)
+  linux:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJson(needs.prepare.outputs.php) }}
+        arch: [x86_64, aarch64]
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    name: Linux ${{ matrix.arch }} PHP ${{ matrix.php }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tools
+      - uses: actions/checkout@v4
+        with:
+          repository: php/frankenphp
+          ref: v${{ needs.prepare.outputs.frankenphp }}
+          path: frankenphp
+          persist-credentials: false
+      - name: Add Xdebug to the build recipe
+        run: tools/scripts/patch-craft.sh frankenphp/craft.yml
+      - name: Build the builder image (RHEL 8 glibc, like the official -gnu binaries)
+        working-directory: frankenphp
+        run: docker build -f static-builder.Dockerfile --build-arg FRANKENPHP_VERSION=${{ needs.prepare.outputs.frankenphp }} --build-arg LIBC=gnu -t fp-builder .
+      - name: Build FrankenPHP + xdebug.so
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PHP_VERSION: ${{ matrix.php }}
+        run: |
+          mkdir -p output
+          docker run --rm --ulimit nofile=8192:8192 \
+            -v "$PWD/output:/output" -v "$PWD/tools/scripts:/tools:ro" \
+            -e OUTPUT_DIR=/output -e SPC_LOGS_DIR=/output/log -e GITHUB_TOKEN -e PHP_VERSION -e PHP_EXTENSIONS \
+            fp-builder bash -c './build-static.sh && /tools/collect-xdebug.sh dist /output'
+      - name: Verify Xdebug loads, then package
+        run: tools/scripts/package-unix.sh output "frankenphp-linux-${{ matrix.arch }}" "${{ matrix.php }}" "linux-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-linux-${{ matrix.arch }}-php${{ matrix.php }}
+          path: dist-pkg/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: log-linux-${{ matrix.arch }}-php${{ matrix.php }}
+          path: output/log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- macOS
+  mac:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJson(needs.prepare.outputs.php) }}
+        arch: [arm64, x86_64]
+    runs-on: ${{ matrix.arch == 'arm64' && 'macos-15' || 'macos-15-intel' }}
+    name: macOS ${{ matrix.arch }} PHP ${{ matrix.php }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tools
+      - uses: actions/checkout@v4
+        with:
+          repository: php/frankenphp
+          ref: v${{ needs.prepare.outputs.frankenphp }}
+          path: frankenphp
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: frankenphp/go.mod
+          cache: false
+      - name: Add Xdebug to the build recipe
+        run: tools/scripts/patch-craft.sh frankenphp/craft.yml
+      - name: Build FrankenPHP + xdebug.so
+        working-directory: frankenphp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FRANKENPHP_VERSION: ${{ needs.prepare.outputs.frankenphp }}
+          PHP_VERSION: ${{ matrix.php }}
+          OUTPUT_DIR: ${{ github.workspace }}/output
+        run: |
+          ./build-static.sh
+          ../tools/scripts/collect-xdebug.sh dist "$OUTPUT_DIR"
+      - name: Verify Xdebug loads, then package
+        run: tools/scripts/package-unix.sh output "frankenphp-mac-${{ matrix.arch }}" "${{ matrix.php }}" "mac-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-mac-${{ matrix.arch }}-php${{ matrix.php }}
+          path: dist-pkg/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: log-mac-${{ matrix.arch }}-php${{ matrix.php }}
+          path: frankenphp/dist/log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------- Windows
+  windows:
+    needs: prepare
+    if: needs.prepare.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJson(needs.prepare.outputs.php) }}
+    runs-on: windows-latest
+    name: Windows x86_64 PHP ${{ matrix.php }}
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: "-ldflags=-extldflags=-fuse-ld=lld -tags=nobadger,nomysql,nopgx,deprecated_topic,deprecated_claim"
+      CC: clang
+      CXX: clang++
+      PHP_MINOR: ${{ matrix.php }}
+      FRANKENPHP_VERSION: ${{ needs.prepare.outputs.frankenphp }}
+    steps:
+      - run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v4
+        with:
+          path: tools
+      - uses: actions/checkout@v4
+        with:
+          repository: php/frankenphp
+          ref: v${{ needs.prepare.outputs.frankenphp }}
+          path: frankenphp
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: frankenphp/go.mod
+          cache: false
+      - name: Install vcpkg libraries
+        working-directory: frankenphp
+        run: vcpkg install
+      - name: Download watcher
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = gh release list --repo e-dant/watcher --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName'
+          gh release download $tag --repo e-dant/watcher --pattern "*x86_64-pc-windows-msvc.tar" -O watcher.tar
+          tar -xf watcher.tar -C "$env:GITHUB_WORKSPACE"
+          Rename-Item "$env:GITHUB_WORKSPACE\x86_64-pc-windows-msvc" "watcher"
+      - name: Download PHP ${{ matrix.php }} (thread-safe), devel pack and Xdebug
+        run: tools/scripts/windows-php.ps1
+      - name: Build FrankenPHP
+        working-directory: frankenphp\caddy\frankenphp
+        run: |
+          $v = "FrankenPHP $env:FRANKENPHP_VERSION PHP $env:PHP_VERSION Caddy"
+          go build -ldflags="-extldflags=-fuse-ld=lld -X 'github.com/caddyserver/caddy/v2.CustomVersion=$v' -X 'github.com/caddyserver/caddy/v2.CustomBinaryName=frankenphp' -X 'github.com/caddyserver/caddy/v2/modules/caddyhttp.ServerHeader=FrankenPHP Caddy'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Assemble, verify Xdebug loads, package
+        run: tools/scripts/package-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-windows-x86_64-php${{ matrix.php }}
+          path: dist-pkg/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- Release
+  release:
+    needs: [prepare, linux, mac, windows]
+    # Publish whatever succeeded; QuickSpin falls back for missing combinations.
+    if: always() && needs.prepare.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: assets
+          merge-multiple: true
+      - name: Write manifest.json
+        env:
+          FP: ${{ needs.prepare.outputs.frankenphp }}
+        run: scripts/manifest.sh assets "$FP" > assets/manifest.json && cat assets/manifest.json
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.release }}
+          FP: ${{ needs.prepare.outputs.frankenphp }}
+        run: |
+          set -euo pipefail
+          count=$(ls assets | grep -vc manifest.json || true)
+          [ "$count" -gt 0 ] || { echo "::error::no builds succeeded"; exit 1; }
+          notes="FrankenPHP ${FP} with Xdebug, built for QuickSpin. $count packages; see manifest.json for PHP versions and checksums."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber
+            gh release edit "$TAG" --notes "$notes" --latest
+          else
+            gh release create "$TAG" assets/* --title "FrankenPHP ${FP} + Xdebug" --notes "$notes" --latest
+          fi
