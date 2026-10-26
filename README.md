@@ -5,7 +5,7 @@
 | Platform | Built from | Xdebug |
 |---|---|---|
 | Linux x86_64 / aarch64 | FrankenPHP's own glibc static build (RHEL 8 builder, so it runs on glibc 2.28+) | `xdebug.so` built by static-php-cli as a shared extension |
-| macOS arm64 / x86_64 | FrankenPHP's `build-static.sh` | `xdebug.so`, shared extension |
+| macOS arm64 (Apple Silicon) | FrankenPHP's `build-static.sh` | `xdebug.so`, shared extension |
 | Windows x86_64 | Official thread-safe PHP from windows.php.net + FrankenPHP's Windows build | Official thread-safe DLL from xdebug.org |
 
 These builds are made for QuickSpin, a portable WordPress development environment, but they are ordinary FrankenPHP binaries.
@@ -19,7 +19,6 @@ manifest.json                                  machine-readable index (QuickSpin
 frankenphp-php8.5-linux-x86_64.tar.gz          frankenphp, xdebug.so, buildinfo.json
 frankenphp-php8.5-linux-aarch64.tar.gz
 frankenphp-php8.5-mac-arm64.tar.gz
-frankenphp-php8.5-mac-x86_64.tar.gz
 frankenphp-php8.5-windows-x86_64.zip           frankenphp.exe, PHP DLLs, ext\ (incl. php_xdebug.dll), php.exe
 ```
 

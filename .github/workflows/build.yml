@@ -1,6 +1,6 @@
 ---
 # Builds FrankenPHP for PHP 8.5 (more versions can be added via the "php" input), with an Xdebug module,
-# for Linux (glibc, x86_64 + aarch64), macOS (arm64 + x86_64) and Windows (x86_64),
+# for Linux (glibc, x86_64 + aarch64), macOS (Apple Silicon, arm64) and Windows (x86_64),
 # and publishes them as one GitHub release with a manifest.json that QuickSpin reads:
 #   https://github.com/<owner>/<repo>/releases/latest/download/manifest.json
 name: Build FrankenPHP + Xdebug
@@ -131,8 +131,8 @@ jobs:
       fail-fast: false
       matrix:
         php: ${{ fromJson(needs.prepare.outputs.php) }}
-        arch: [arm64, x86_64]
-    runs-on: ${{ matrix.arch == 'arm64' && 'macos-15' || 'macos-15-intel' }}
+        arch: [arm64] # Apple Silicon only
+    runs-on: macos-15
     name: macOS ${{ matrix.arch }} PHP ${{ matrix.php }}
     env:
       HOMEBREW_NO_AUTO_UPDATE: 1
