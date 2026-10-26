@@ -1,5 +1,5 @@
 ---
-# Builds FrankenPHP for several PHP versions, each with an Xdebug module,
+# Builds FrankenPHP for PHP 8.5 (more versions can be added via the "php" input), with an Xdebug module,
 # for Linux (glibc, x86_64 + aarch64), macOS (arm64 + x86_64) and Windows (x86_64),
 # and publishes them as one GitHub release with a manifest.json that QuickSpin reads:
 #   https://github.com/<owner>/<repo>/releases/latest/download/manifest.json
@@ -13,9 +13,9 @@ on:
         required: false
         type: string
       php:
-        description: "PHP minor versions, comma-separated"
+        description: "PHP minor versions, comma-separated (8.5 or newer)"
         required: false
-        default: "8.2,8.3,8.4,8.5"
+        default: "8.5"
         type: string
       force:
         description: "Rebuild even if a release for this FrankenPHP version exists"
@@ -49,7 +49,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INPUT_FP: ${{ inputs.frankenphp }}
-          INPUT_PHP: ${{ inputs.php || '8.2,8.3,8.4,8.5' }}
+          INPUT_PHP: ${{ inputs.php || '8.5' }}
           FORCE: ${{ inputs.force || false }}
         run: |
           set -euo pipefail
@@ -65,7 +65,8 @@ jobs:
             echo "Release $release already exists — nothing to do."
             build=false
           fi
-          php_json="$(echo "$INPUT_PHP" | tr -d ' ' | jq -Rc 'split(",") | map(select(test("^8\\.[2-9]$")))')"
+          php_json="$(echo "$INPUT_PHP" | tr -d ' ' | jq -Rc 'split(",") | map(select(test("^(8\\.[5-9]|9\\.[0-9])$")))')"
+          [ "$php_json" != "[]" ] || { echo "::error::no supported PHP version in '$INPUT_PHP' (8.5 or newer)"; exit 1; }
           echo "frankenphp=$fp" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
           echo "build=$build" >> "$GITHUB_OUTPUT"
@@ -94,7 +95,7 @@ jobs:
           path: frankenphp
           persist-credentials: false
       - name: Add Xdebug to the build recipe
-        run: tools/scripts/patch-craft.sh frankenphp/craft.yml
+        run: bash tools/scripts/patch-craft.sh frankenphp/craft.yml
       - name: Build the builder image (RHEL 8 glibc, like the official -gnu binaries)
         working-directory: frankenphp
         run: docker build -f static-builder.Dockerfile --build-arg FRANKENPHP_VERSION=${{ needs.prepare.outputs.frankenphp }} --build-arg LIBC=gnu -t fp-builder .
@@ -107,9 +108,9 @@ jobs:
           docker run --rm --ulimit nofile=8192:8192 \
             -v "$PWD/output:/output" -v "$PWD/tools/scripts:/tools:ro" \
             -e OUTPUT_DIR=/output -e SPC_LOGS_DIR=/output/log -e GITHUB_TOKEN -e PHP_VERSION -e PHP_EXTENSIONS \
-            fp-builder bash -c './build-static.sh && /tools/collect-xdebug.sh dist /output'
+            fp-builder bash -c './build-static.sh && bash /tools/collect-xdebug.sh dist /output'
       - name: Verify Xdebug loads, then package
-        run: tools/scripts/package-unix.sh output "frankenphp-linux-${{ matrix.arch }}" "${{ matrix.php }}" "linux-${{ matrix.arch }}"
+        run: bash tools/scripts/package-unix.sh output "frankenphp-linux-${{ matrix.arch }}" "${{ matrix.php }}" "linux-${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-linux-${{ matrix.arch }}-php${{ matrix.php }}
@@ -150,7 +151,7 @@ jobs:
           go-version-file: frankenphp/go.mod
           cache: false
       - name: Add Xdebug to the build recipe
-        run: tools/scripts/patch-craft.sh frankenphp/craft.yml
+        run: bash tools/scripts/patch-craft.sh frankenphp/craft.yml
       - name: Build FrankenPHP + xdebug.so
         working-directory: frankenphp
         env:
@@ -160,9 +161,9 @@ jobs:
           OUTPUT_DIR: ${{ github.workspace }}/output
         run: |
           ./build-static.sh
-          ../tools/scripts/collect-xdebug.sh dist "$OUTPUT_DIR"
+          bash ../tools/scripts/collect-xdebug.sh dist "$OUTPUT_DIR"
       - name: Verify Xdebug loads, then package
-        run: tools/scripts/package-unix.sh output "frankenphp-mac-${{ matrix.arch }}" "${{ matrix.php }}" "mac-${{ matrix.arch }}"
+        run: bash tools/scripts/package-unix.sh output "frankenphp-mac-${{ matrix.arch }}" "${{ matrix.php }}" "mac-${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-mac-${{ matrix.arch }}-php${{ matrix.php }}
@@ -254,7 +255,7 @@ jobs:
       - name: Write manifest.json
         env:
           FP: ${{ needs.prepare.outputs.frankenphp }}
-        run: scripts/manifest.sh assets "$FP" > assets/manifest.json && cat assets/manifest.json
+        run: bash scripts/manifest.sh assets "$FP" > assets/manifest.json && cat assets/manifest.json
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,4 @@
+# Keep shell scripts Unix-style even when committed from Windows
+*.sh text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=crlf

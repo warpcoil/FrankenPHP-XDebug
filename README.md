@@ -1,6 +1,6 @@
 # FrankenPHP + Xdebug builds
 
-[FrankenPHP](https://frankenphp.dev) binaries for **PHP 8.2, 8.3, 8.4 and 8.5**, each shipped with a matching **Xdebug** module, for:
+[FrankenPHP](https://frankenphp.dev) binaries for **PHP 8.5**, shipped with a matching **Xdebug** module, for:
 
 | Platform | Built from | Xdebug |
 |---|---|---|
@@ -16,12 +16,11 @@ Every release is tagged `v<FrankenPHP version>` and contains:
 
 ```
 manifest.json                                  machine-readable index (QuickSpin reads this)
-frankenphp-php8.3-linux-x86_64.tar.gz          frankenphp, xdebug.so, buildinfo.json
-frankenphp-php8.3-linux-aarch64.tar.gz
-frankenphp-php8.3-mac-arm64.tar.gz
-frankenphp-php8.3-mac-x86_64.tar.gz
-frankenphp-php8.3-windows-x86_64.zip           frankenphp.exe, PHP DLLs, ext\ (incl. php_xdebug.dll), php.exe
-… the same for 8.2, 8.4, 8.5
+frankenphp-php8.5-linux-x86_64.tar.gz          frankenphp, xdebug.so, buildinfo.json
+frankenphp-php8.5-linux-aarch64.tar.gz
+frankenphp-php8.5-mac-arm64.tar.gz
+frankenphp-php8.5-mac-x86_64.tar.gz
+frankenphp-php8.5-windows-x86_64.zip           frankenphp.exe, PHP DLLs, ext\ (incl. php_xdebug.dll), php.exe
 ```
 
 The latest manifest is always at
@@ -34,8 +33,8 @@ The latest manifest is always at
   "frankenphp": "1.13.3",
   "built": "2026-10-26T04:40:00Z",
   "assets": [
-    { "file": "frankenphp-php8.3-linux-x86_64.tar.gz", "php": "8.3", "platform": "linux-x86_64",
-      "phpVersion": "8.3.30", "xdebug": "3.5.3", "zts": true, "sha256": "…", "size": 61234567 }
+    { "file": "frankenphp-php8.5-linux-x86_64.tar.gz", "php": "8.5", "platform": "linux-x86_64",
+      "phpVersion": "8.5.12", "xdebug": "3.5.3", "zts": true, "sha256": "…", "size": 61234567 }
   ]
 }
 ```
@@ -62,7 +61,7 @@ On Windows, use `zend_extension=C:/path/ext/php_xdebug.dll` and also `extension_
 `.github/workflows/build.yml` runs:
 
 - **Every Monday**: if FrankenPHP published a new release, it gets built. Newer PHP patch versions are picked up whenever a build runs.
-- **Manually** (Actions → *Build FrankenPHP + Xdebug* → *Run workflow*): you can choose the FrankenPHP version, the PHP versions, and force a rebuild.
+- **Manually** (Actions → *Build FrankenPHP + Xdebug* → *Run workflow*): you can choose the FrankenPHP version and force a rebuild. The *php* input takes a comma-separated list (default `8.5`) if a newer PHP needs building alongside it later.
 
 Every package is checked before it's published: the binary has to start, load `xdebug.so` / `php_xdebug.dll`, and have mysqli, gd, intl, mbstring, curl and zip. A combination that fails is skipped and the rest are still released. QuickSpin falls back to the official FrankenPHP build (PHP 8.5, no Xdebug) for anything missing.
 
